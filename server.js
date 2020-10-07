@@ -2,12 +2,12 @@ const express = require('express');
 const app = express();
 const cors = require('cors');
 const fs = require('fs');
-const sd = require('silly-datetime');
 const readline = require('readline');
 const stream = require('stream');
 const dotenv = require('dotenv');
 const config = dotenv.config();
-let name_count_objects = [];
+
+let nameMap = new Map();
 
 app.use(cors());
 
@@ -16,17 +16,7 @@ const output_file = process.env.OUTPUT_FILE;
 const first_name_file = process.env.FIRST_NAME_FILE;
 
 async function initFirstName(){
-    name_count_objects = [];
-    const category = ["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"];
-    category.reverse();
-
-    for(let i=0;i<category.length;i++){
-        let item = new Object();
-        item.category = category[i];
-        item.first_name = [];
-        name_count_objects.push(item);
-    }
-
+    nameMap.clear();
     const nameFileStream = fs.createReadStream(first_name_file);
     const nameLines = readline.createInterface({
         input: nameFileStream,
@@ -34,29 +24,15 @@ async function initFirstName(){
     });
     
     for await(const line of nameLines){
-        let first_letter = line.substr(0,1);
         let item = new Object();
-        item.name = line;
+        item.name = line.toLowerCase();
         item.count = 0;
         let found = false;
-        for(let i=0;i<name_count_objects.length;i++){
-            if(first_letter.toUpperCase() == name_count_objects[i].category){
-                for(let j=0;j<name_count_objects[i].first_name.length;j++){
-                    if(name_count_objects[i].first_name[j].name == item.name){
-                        found = true;
-                    }
-                }
-                if(!found){
-                    name_count_objects[i].first_name.push(item);
-                }
-            }
+        if(!nameMap.has(item.name)){
+            nameMap.set(item.name, 0);
         }
     }
-    for(let i=0;i<name_count_objects.length;i++){
-        name_count_objects[i].first_name.sort();       
-        name_count_objects[i].first_name.reverse();
-    }
-    return name_count_objects;
+    return nameMap;
 }
 
 async function countFirstName(){
@@ -69,7 +45,7 @@ async function countFirstName(){
         console.log(line);
         let res = line.split(" ");
         for(let i = 0;i<res.length;i++){
-            let word = res[i];
+            let word = res[i].toLowerCase();
             let first_letter = word.substr(0,1);
             let last_char = word.substr(word.length-1,1);
             let asc = last_char.charCodeAt();
@@ -77,84 +53,47 @@ async function countFirstName(){
             if( asc <= 64 || (asc>=91&&asc<=96) || asc>=123){
                 word = word.substr(0,word.length-1);
             }
-            for(let j=0;j<name_count_objects.length;j++){
-                if(first_letter.toUpperCase() == name_count_objects[j].category){
-                //    console.log("find category!");
-                    for(let k=0;k<name_count_objects[j].first_name.length;k++){
-                        if(word.toLowerCase() == name_count_objects[j].first_name[k].name.toLowerCase()){
-                            console.log("find first name!");
-                            name_count_objects[j].first_name[k].count = 
-                                parseInt(name_count_objects[j].first_name[k].count) + 1;
-                        }
-                    }
-                }
+            if(nameMap.has(word)){
+                let count = parseInt(nameMap.get(word)) + 1; 
+                nameMap.set(word, count);
             }
         }
     }
-    return name_count_objects;
+    return nameMap;
 }
 
 async function writeOutputFile(){
     const outputFileStream = fs.createWriteStream(output_file);
     outputFileStream.write("");
-    for(let i = 0; i<name_count_objects.length; i++){
-        for(let j=0; j<name_count_objects[i].first_name.length; j++){
-            let str = name_count_objects[i].first_name[j].name + ":" 
-                + name_count_objects[i].first_name[j].count + "\r\n";
-            outputFileStream.write(str);
-        }
+    let arrayObj = Array.from(nameMap);
+    arrayObj.sort(function(a,b){return a[0].localeCompare(b[0])});
+    arrayObj.reverse();
+    let result = new Map(arrayObj.map(item=>[item[0], item[1]]));
+    for(let [key, value] of result){
+        let str = key + ":" + value + "\r\n";
+        outputFileStream.write(str);
     }
-}
-
-async function processLine(){
-    name_count_objects = [];
-    const fileStream = fs.createReadStream(output_file);
-    const lines = readline.createInterface({
-        input: fileStream,
-        crlfDelay: Infinity //  transfer '\r\n' to single line return
-    });
-    let i = 0;
-    for await (const line of lines){
-        let res = line.split(":");
-        console.log(res);
-        let item = new Object();
-        item.name = res[0];
-        item.count = res[1];
-        name_count_objects.push(item);
-    }
-    return name_count_objects;
 }
 
 function getCountByName(name){
-   
-    console.log("getCountByName:"+name);
-    console.log("name_count_objects size:"+name_count_objects.length);
-    let first_letter = name.substr(0,1);
     let result = new Object();
-    for(let i=0;i<name_count_objects.length;i++){
-        if(name_count_objects[i].category.toLowerCase() == first_letter.toLowerCase()){
-            for(let j=0;j<name_count_objects[i].first_name.length; j++){
-                if(name_count_objects[i].first_name[j].name.toLowerCase() == name.toLowerCase()){
-                    result = name_count_objects[i].first_name[j];
-                    return result;
-                }
-            }
-        }
-    }
-   
-    result.name = name;
+    let nameLower = name.toLowerCase();
+    result.name = nameLower;
     result.count = 0;
+    if(nameMap.has(nameLower)){
+        result.count = nameMap.get(nameLower);
+    }
     return result;
 }
-
+        
 app.get('/', function(req, res){
     console.time("count name");
     initFirstName()
-    .then((result) => {
+    .then((tempMap) => {
         countFirstName()
-        .then((re)=>{
+        .then((re)=> {
             console.timeEnd("count name");
-            res.json(re);
+            res.json({message:"process finished!"});
             writeOutputFile();
         })
         .catch(console.error);
